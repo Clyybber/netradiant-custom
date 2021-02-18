@@ -318,10 +318,18 @@ const image_t *ImageLoad( const char *name ){
 		}
 		#endif
 	}
+	else if( sprintf( filename, "dds/%s.dds", name ); buffer = vfsLoadFile( filename ) )
+	{
+		/* also look for .dds image in dds/ prefix like Doom3 or DarkPlaces */
+		LoadDDSBuffer( buffer.data(), buffer.size(), &pixels, &width, &height );
+	}
 	else if( path_set_extension( filename, ".ktx" ); buffer = vfsLoadFile( filename ) )
 	{
 		LoadKTXBufferFirstImage( buffer.data(), buffer.size(), &pixels, &width, &height );
 	}
+
+	/* tell user which image file is found for the given texture path */
+	Sys_FPrintf( SYS_VRB, "Loaded image: \"%s\"\n", name );
 
 	/* make sure everything's kosher */
 	if ( !buffer || width <= 0 || height <= 0 || pixels == nullptr ) {

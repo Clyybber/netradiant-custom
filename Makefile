@@ -967,8 +967,8 @@ libquickhull.$(A): CPPFLAGS_EXTRA := -Ilibs
 libquickhull.$(A): \
 	libs/quickhull/QuickHull.o \
 
-$(INSTALLDIR)/modules/archivezip.$(DLL): LIBS_EXTRA := $(LIBS_ZLIB)
-$(INSTALLDIR)/modules/archivezip.$(DLL): CPPFLAGS_EXTRA := $(CPPFLAGS_ZLIB) -Ilibs -Iinclude
+$(INSTALLDIR)/modules/archivezip.$(DLL): LIBS_EXTRA := $(LIBS_ZLIB) $(LIBS_GLIB)
+$(INSTALLDIR)/modules/archivezip.$(DLL): CPPFLAGS_EXTRA := $(CPPFLAGS_ZLIB) $(CPPFLAGS_GLIB) -Ilibs -Iinclude
 $(INSTALLDIR)/modules/archivezip.$(DLL): \
 	plugins/archivezip/archive.o \
 	plugins/archivezip/pkzip.o \

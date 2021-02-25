@@ -262,6 +262,56 @@ int vfsGetFileCount( const char *filename ){
 	return count;
 }
 
+static qboolean isSymlink(const unz_file_info *fileInfo) {
+	// see https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/stat.h
+	// redefine so it works outside of Unices
+	const unsigned long Q3MAP_S_IFMT = 00170000;
+	const unsigned long Q3MAP_S_IFLNK = 0120000;
+	// see https://trac.edgewall.org/attachment/ticket/8919/ZipDownload.patch
+	const unsigned long PKZIP_EXTERNAL_ATTR_FILE_TYPE_SHIFT = 16;
+
+	unsigned long attr = fileInfo->external_fa >> PKZIP_EXTERNAL_ATTR_FILE_TYPE_SHIFT;
+	return (attr & Q3MAP_S_IFMT) == Q3MAP_S_IFLNK;
+}
+
+// The zip format has a maximum filename size of 64K
+static const int MAX_FILENAME_BUF = 65537;
+
+/* The symlink implementation is ported from Dæmon engine implementation by slipher which was a complete rewrite of one illwieckz did on Dæmon by taking inspiration from Darkplaces engine.
+
+See:
+
+- https://github.com/DaemonEngine/Daemon/blob/master/src/common/FileSystem.cpp
+- https://gitlab.com/xonotic/darkplaces/-/blob/div0-stable/fs.c
+
+Some words by slipher:
+
+> Symlinks are a bad feature which you should not use. Therefore, the implementation is as
+> slow as possible with a full iteration of the archive performed for each symlink.
+
+> The symlink path `relative` must be relative to the symlink's location.
+> Only supports paths consisting of "../" 0 or more times, followed by non-magical path components.
+*/
+void resolveSymlinkPath( const char* base, const char* relative, char* resolved ){
+
+	base = g_path_get_dirname( base );
+
+	while( g_str_has_prefix( relative, "../" ) )
+	{
+		if ( base[0] == '\0' )
+		{
+			Sys_FPrintf( SYS_WRN, "Error while reading symbolic link: \"%s\": no such directory\n", base );
+			resolved[0] = '\0';
+			return;
+		}
+
+		base = g_path_get_dirname( base );
+		relative += 3;
+	}
+
+	snprintf( resolved, MAX_FILENAME_BUF, "%s/%s", base, relative);
+}
+
 // NOTE: when loading a file, you have to allocate one extra byte and set it to \0
 MemBuffer vfsLoadFile( const char *filename, int index /* = 0 */ ){
 
@@ -304,6 +354,11 @@ MemBuffer vfsLoadFile( const char *filename, int index /* = 0 */ ){
 
 	MemBuffer buffer;
 
+	// Do not resolve more than 5 recursive symbolic links to
+	// prevent circular symbolic links.
+	int max_symlink_depth = 5;
+
+	openSymlinkTarget:
 	for ( const VFS_PAKFILE& file : g_pakFiles )
 	{
 		if ( strEqual( file.name.c_str(), fixed ) && 0 == index-- )
@@ -314,12 +369,48 @@ MemBuffer vfsLoadFile( const char *filename, int index /* = 0 */ ){
 			*(unz_s*)zipfile = file.zipinfo;
 
 			if ( unzOpenCurrentFile( zipfile ) == UNZ_OK ) {
+				unz_file_info fileInfo;
+				char filename_inzip[256];
+				if ( unzGetCurrentFileInfo( zipfile, &fileInfo, filename_inzip, sizeof(filename), NULL, 0, NULL, 0 ) != UNZ_OK ) {
+					buffer = MemBuffer();
+					return buffer;
+				}
+
 				buffer = MemBuffer( file.size );
 
 				if ( unzReadCurrentFile( zipfile, buffer.data(), file.size ) < 0 ) {
 					buffer = MemBuffer();
 				}
 				unzCloseCurrentFile( zipfile );
+
+				if ( isSymlink( &fileInfo ) ) {
+					Sys_FPrintf( SYS_VRB, "Found symbolic link: \"%s\"\n", filename );
+
+					if ( max_symlink_depth == 0 ) {
+						Sys_FPrintf( SYS_WRN, "Maximum symbolic link depth reached\n" );
+						buffer = MemBuffer();
+						return buffer;
+					}
+
+					max_symlink_depth--;
+
+					const char* relative = (const char*) buffer.data();
+					char resolved[MAX_FILENAME_BUF];
+
+					resolveSymlinkPath( file.name.c_str(), relative, resolved );
+
+					Sys_FPrintf( SYS_VRB, "Resolved symbolic link: \"%s\"\n", resolved );
+
+
+					auto fixed = StringOutputStream( 64 )( PathCleaned( resolved ) );
+					FixDOSName( fixed.c_str() );
+					strLower( fixed.c_str() );
+
+					// slow as possible full iteration of the archive
+					goto openSymlinkTarget;
+				}
+
+
 			}
 			return buffer;
 		}
